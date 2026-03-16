@@ -56,7 +56,7 @@ cat << 'EOF' > brain.svg
 </svg>
 EOF
 
-# 3. BACKEND 
+# 3. BACKEND
 printf "  ${BLUE}▶${NC} Building Knowledge Engine ${VERSION}...\n"
 cat << 'EOF' > main.py
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -74,18 +74,12 @@ app = FastAPI()
 DB_PATH, DOCS_DIR = "./chroma_db", "./assistant_vault"
 os.makedirs(DOCS_DIR, exist_ok=True)
 
-embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://127.0.0.1:11434")
-llm = OllamaLLM(model="llama3.2", base_url="http://127.0.0.1:11434")
-vectorstore = None
-
-def init_db():
-    global vectorstore
-    try:
-        vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
-    except Exception as e:
-        print(f"Error initializing models: {e}")
-
-init_db()
+try:
+    embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://127.0.0.1:11434")
+    llm = OllamaLLM(model="llama3.2", base_url="http://127.0.0.1:11434")
+    vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
+except Exception as e:
+    print(f"Error initializing models: {e}")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
@@ -196,7 +190,10 @@ async def nuke_vault():
             vectorstore.delete_collection()
         except Exception:
             pass
-        init_db()
+        
+        # Re-initialize DB path after dropping
+        embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://127.0.0.1:11434")
+        vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
 
         for item in os.listdir(DOCS_DIR):
             item_path = os.path.join(DOCS_DIR, item)
@@ -412,7 +409,12 @@ cat << 'EOF' > index.html
                 <div class="step-box"><i data-lucide="hard-drive" style="color:var(--accent); width:24px; flex-shrink:0; margin-top:2px;"></i><div><strong>2. Local Storage</strong><span>Data is saved securely to ChromaDB on your Mac's SSD. No cloud needed.</span></div></div>
                 <div class="step-box"><i data-lucide="cpu" style="color:var(--accent); width:24px; flex-shrink:0; margin-top:2px;"></i><div><strong>3. Retrieval & Reasoning</strong><span>Llama 3.2 pulls the exact context required to answer questions offline.</span></div></div>
             </div>
-            <div style="padding:15px; background:rgba(0,122,255,0.08); border-radius:12px; font-weight:700; color:var(--accent); text-align:center; font-size: 1.05rem;">Designed by Arun Thomas</div>
+            <div style="padding:15px; background:rgba(0,122,255,0.08); border-radius:12px; font-weight:700; color:var(--accent); display:flex; align-items:center; justify-content:center; gap:8px; font-size: 1.05rem;">
+                Designed by Arun Thomas
+                <a href="mailto:arunthomas04042001@gmail.com" style="color:var(--accent); display:flex; align-items:center;" title="Email Developer">
+                    <i data-lucide="mail" style="width:18px; height:18px;"></i>
+                </a>
+            </div>
             <button onclick="closeModal('infoModal')" class="btn-close">Close Information</button>
         </div></div>
         
@@ -433,6 +435,20 @@ cat << 'EOF' > index.html
     <script>
         lucide.createIcons();
         
+        let existingSessions = JSON.parse(localStorage.getItem('sessions') || '[]');
+        if (existingSessions.length === 0 || (existingSessions.length === 1 && existingSessions[0] === 'General')) {
+            existingSessions = ['Getting Started'];
+            localStorage.setItem('sessions', JSON.stringify(existingSessions));
+            localStorage.setItem('lastSession', 'Getting Started');
+        } else if (!existingSessions.includes('Getting Started')) {
+            existingSessions.unshift('Getting Started');
+            localStorage.setItem('sessions', JSON.stringify(existingSessions));
+        }
+
+        if (!localStorage.getItem('archivedSessions')) {
+            localStorage.setItem('archivedSessions', JSON.stringify([]));
+        }
+
         const hashSVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"></line><line x1="4" y1="15" x2="20" y2="15"></line><line x1="10" y1="3" x2="8" y2="21"></line><line x1="16" y1="3" x2="14" y2="21"></line></svg>';
         const trashSVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>';
         const archiveSVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
@@ -448,20 +464,6 @@ cat << 'EOF' > index.html
         const databaseSVG = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5V19A9 3 0 0 0 21 19V5"></path><path d="M3 12A9 3 0 0 0 21 12"></path></svg>';
         const msgSquareSVG = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
         const infoSVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>';
-
-        let existingSessions = JSON.parse(localStorage.getItem('sessions') || '[]');
-        if (existingSessions.length === 0 || (existingSessions.length === 1 && existingSessions[0] === 'General')) {
-            existingSessions = ['Getting Started'];
-            localStorage.setItem('sessions', JSON.stringify(existingSessions));
-            localStorage.setItem('lastSession', 'Getting Started');
-        } else if (!existingSessions.includes('Getting Started')) {
-            existingSessions.unshift('Getting Started');
-            localStorage.setItem('sessions', JSON.stringify(existingSessions));
-        }
-
-        if (!localStorage.getItem('archivedSessions')) {
-            localStorage.setItem('archivedSessions', JSON.stringify([]));
-        }
 
         const welcomeHTML = `
         <div style="max-width: 640px; margin: 20px auto; text-align: center;">
@@ -647,17 +649,17 @@ cat << 'EOF' > index.html
             if (history.length === 0) {
                 chatBox.innerHTML = `
                     <div class="empty-state">
-                        <div class="empty-icon">${brainSVG}</div>
+                        <div class="empty-icon" style="color:white;">${brainSVG}</div>
                         <h2 style="font-size: 1.8rem; margin-bottom: 10px; font-weight: 700;">Ready for questions!</h2>
                         <p style="color: var(--mute); font-size: 1.1rem;">This session is clean and ready to go.</p>
-                        <div class="empty-grid" style="margin-top:30px;">
-                            <div class="empty-card">
-                                <span style="color:var(--accent); display:block; margin-bottom:12px;">${databaseSVG}</span>
+                        <div class="empty-grid" style="margin-top:20px;">
+                            <div class="empty-card" style="text-align:center;">
+                                <span style="display:flex; justify-content:center; color:var(--accent); margin-bottom:12px;">${databaseSVG}</span>
                                 <h3 style="font-size: 1rem; margin-bottom: 8px; font-weight: 600;">1. Global Memory Bank</h3>
                                 <p style="font-size: 0.85rem; color: var(--mute); line-height: 1.5;">Your AI has access to all active documents. Add more via the database icon.</p>
                             </div>
-                            <div class="empty-card">
-                                <span style="color:var(--accent); display:block; margin-bottom:12px;">${msgSquareSVG}</span>
+                            <div class="empty-card" style="text-align:center;">
+                                <span style="display:flex; justify-content:center; color:var(--accent); margin-bottom:12px;">${msgSquareSVG}</span>
                                 <h3 style="font-size: 1rem; margin-bottom: 8px; font-weight: 600;">2. Ask Anything</h3>
                                 <p style="font-size: 0.85rem; color: var(--mute); line-height: 1.5;">Type below to search your files. I will synthesize an answer and cite my sources.</p>
                             </div>
@@ -674,6 +676,7 @@ cat << 'EOF' > index.html
                 }); 
             }
             chatBox.scrollTop = chatBox.scrollHeight; 
+            lucide.createIcons();
         }
 
         async function nukeVault() {
@@ -747,7 +750,6 @@ cat << 'EOF' > index.html
                 let sess = JSON.parse(localStorage.getItem('sessions') || '["Getting Started"]'); 
                 if (!sess.includes(name)) sess.push(name); 
                 
-                // Ensure it's unarchived if it existed
                 let arch = JSON.parse(localStorage.getItem('archivedSessions') || '[]');
                 arch = arch.filter(s => s !== name);
                 localStorage.setItem('archivedSessions', JSON.stringify(arch));
@@ -767,7 +769,6 @@ cat << 'EOF' > index.html
                 archived = archived.filter(s => s !== name);
             } else {
                 archived.push(name);
-                // Switch session if we just archived the active one
                 if (currentSession === name) {
                     const allSessions = JSON.parse(localStorage.getItem('sessions') || '[]');
                     const active = allSessions.filter(s => !archived.includes(s));
