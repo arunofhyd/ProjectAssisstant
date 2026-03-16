@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/brain.svg" width="80" height="80" alt="Brain Icon">
+  <img src="https://api.iconify.design/lucide:brain.svg?color=%230a84ff" width="80" height="80" alt="Brain Icon">
   <h1>Project Assistant v1.0</h1>
   <p>Your private, offline AI intelligence powered directly by your Mac's Apple Silicon.</p>
 </div>
