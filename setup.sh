@@ -56,7 +56,7 @@ cat << 'EOF' > brain.svg
 </svg>
 EOF
 
-# 3. BACKEND (Global Memory Bank)
+# 3. BACKEND 
 printf "  ${BLUE}▶${NC} Building Knowledge Engine ${VERSION}...\n"
 cat << 'EOF' > main.py
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -74,12 +74,18 @@ app = FastAPI()
 DB_PATH, DOCS_DIR = "./chroma_db", "./assistant_vault"
 os.makedirs(DOCS_DIR, exist_ok=True)
 
-try:
-    embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://127.0.0.1:11434")
-    llm = OllamaLLM(model="llama3.2", base_url="http://127.0.0.1:11434")
-    vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
-except Exception as e:
-    print(f"Error initializing models: {e}")
+embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://127.0.0.1:11434")
+llm = OllamaLLM(model="llama3.2", base_url="http://127.0.0.1:11434")
+vectorstore = None
+
+def init_db():
+    global vectorstore
+    try:
+        vectorstore = Chroma(persist_directory=DB_PATH, embedding_function=embeddings)
+    except Exception as e:
+        print(f"Error initializing models: {e}")
+
+init_db()
 
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
@@ -150,7 +156,6 @@ async def learn_file(filepath: str = Form(...)):
         if filepath.lower().endswith('.pdf'): loader = PyPDFLoader(full_path); docs = loader.load()
         else: loader = TextLoader(full_path); docs = loader.load()
         
-        # Removed session tagging so it's globally available
         for doc in docs: doc.metadata.update({"timestamp": tm, "source": filepath})
         chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200).split_documents(docs)
         vectorstore.add_documents(chunks)
@@ -183,6 +188,27 @@ async def delete_item(path: str = Form(...), is_folder: str = Form(...)):
         
     return {"message": "Deleted"}
 
+@app.post("/nuke")
+async def nuke_vault():
+    global vectorstore
+    try:
+        try:
+            vectorstore.delete_collection()
+        except Exception:
+            pass
+        init_db()
+
+        for item in os.listdir(DOCS_DIR):
+            item_path = os.path.join(DOCS_DIR, item)
+            if os.path.isfile(item_path):
+                os.remove(item_path)
+            elif os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+
+        return {"message": "Vault nuked successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/chat")
 async def chat(message: str = Form(...), session_name: str = Form(...)):
     try:
@@ -190,7 +216,6 @@ async def chat(message: str = Form(...), session_name: str = Form(...)):
         if message.lower().strip() in greetings:
             return {"reply": f"Hello! I am your Project Assistant. I am operating in the **{session_name}** session. How can I help you today?"}
 
-        # THE FIX: Removed the session filter so it searches the Global Brain
         try:
             results = vectorstore.similarity_search(message, k=5)
         except Exception:
@@ -242,31 +267,35 @@ cat << 'EOF' > index.html
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
         body { background: var(--bg); color: var(--text); height: 100vh; display: flex; transition: background 0.3s; }
         
-        .sidebar { width: 300px; background: var(--side); border-right: 1px solid var(--border); display: flex; flex-direction: column; transition: transform 0.3s ease; z-index: 50; flex-shrink: 0; }
+        .sidebar { width: 300px; background: var(--side); border-right: 1px solid var(--border); display: flex; flex-direction: column; transition: transform 0.3s ease; z-index: 50; flex-shrink: 0; position: relative; }
         .sidebar.hidden { transform: translateX(-300px); position: absolute; }
-        .sidebar-header { padding: 40px 24px 20px; }
+        .sidebar-header { padding: 40px 24px 10px; }
         .sidebar-header h1 { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.5px; }
-        .sidebar-scroll { flex: 1; overflow-y: auto; padding: 0 16px; }
+        .sidebar-scroll { flex: 1; overflow-y: auto; padding: 0 16px 20px; }
         .section-label { font-size: 0.75rem; font-weight: 700; color: var(--mute); text-transform: uppercase; margin: 20px 0 10px 8px; }
         
-        .nav-item { padding: 12px 16px; border-radius: 12px; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; transition: 0.2s; }
-        .nav-item-content { display: flex; align-items: center; gap: 10px; }
-        .nav-item-content svg { width: 18px; height: 18px; flex-shrink: 0; }
+        .nav-item { padding: 10px 14px; border-radius: 12px; cursor: pointer; font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; transition: 0.2s; }
+        .nav-item-content { display: flex; align-items: center; gap: 10px; overflow: hidden; flex: 1; }
+        .nav-item-content span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .nav-item-content svg { width: 16px; height: 16px; flex-shrink: 0; }
         .nav-item:hover { background: rgba(128,128,128,0.1); }
         .nav-item.active { background: var(--accent); color: white; }
-        .delete-btn { opacity: 0; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: inherit; cursor: pointer; transition: 0.2s; }
-        .nav-item:hover .delete-btn { opacity: 1; }
-        .delete-btn:hover { background: rgba(0,0,0,0.1); }
-        body.dark .delete-btn:hover { background: rgba(255,255,255,0.2); }
+        
+        .nav-actions { display: flex; opacity: 0; transition: 0.2s; gap: 2px; }
+        .nav-item:hover .nav-actions { opacity: 1; }
+        .btn-mini { padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: inherit; cursor: pointer; transition: 0.2s; }
+        .btn-mini:hover { background: rgba(0,0,0,0.1); }
+        body.dark .btn-mini:hover { background: rgba(255,255,255,0.2); }
         
         .new-btn { width: 100%; padding: 16px; border-radius: 14px; border: none; background: var(--accent); color: white; font-weight: 700; font-size: 1.05rem; cursor: pointer; transition: opacity 0.2s; }
         .new-btn:hover { opacity: 0.9; }
+        
+        #archiveToggleBtn:hover { background: rgba(128,128,128,0.1); }
 
         .main { flex: 1; display: flex; flex-direction: column; position: relative; min-width: 0; }
         header { padding: 20px 30px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg); }
         .chat-area { flex: 1; padding: 40px 12%; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; scroll-behavior: smooth; }
         
-        /* Markdown Styling Fixes */
         .msg { max-width: 85%; padding: 14px 20px; border-radius: 18px; line-height: 1.6; font-size: 1rem; }
         .msg p { margin-bottom: 10px; }
         .msg p:last-child { margin-bottom: 0; }
@@ -275,15 +304,17 @@ cat << 'EOF' > index.html
         
         .msg.user { align-self: flex-end; background: var(--accent); color: white; border-bottom-right-radius: 4px; }
         .msg.bot { align-self: flex-start; background: var(--msg-bot); border-bottom-left-radius: 4px; }
+        .msg.welcome { max-width: 100%; padding: 0; background: transparent; align-self: center; }
 
         .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; opacity: 0.9; margin-top: 20px; }
         .empty-icon { width: 80px; height: 80px; margin-bottom: 24px; border-radius: 24px; background: var(--msg-bot); display: flex; align-items: center; justify-content: center; }
+        .empty-icon svg { width: 40px; height: 40px; color: var(--accent); }
         .empty-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; width: 100%; max-width: 600px; text-align: left; margin-top: 30px; }
         .empty-card { background: var(--msg-bot); padding: 20px; border-radius: 16px; }
-        .empty-card h3 { font-size: 1rem; margin-bottom: 8px; font-weight: 600; }
+        .empty-card h3 { font-size: 1rem; margin-bottom: 8px; font-weight: 600; display:flex; align-items:center; gap:8px;}
         .empty-card p { font-size: 0.85rem; color: var(--mute); line-height: 1.5; }
 
-        .input-wrap { padding: 20px 12% 40px; }
+        .input-wrap { padding: 20px 12% 40px; transition: 0.3s; }
         .input-pill { display: flex; align-items: center; background: var(--msg-bot); border-radius: 28px; padding: 8px 12px 8px 24px; border: 1px solid var(--border); }
         input[type="text"] { flex: 1; border: none; background: transparent; padding: 10px 0; outline: none; color: var(--text); font-size: 1.05rem; }
         .icon-btn { background: transparent; border: none; color: var(--mute); cursor: pointer; padding: 10px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
@@ -326,14 +357,30 @@ cat << 'EOF' > index.html
 <body class="light">
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header"><h1>Assistant</h1></div>
-        <div class="sidebar-scroll"><div class="section-label">Sessions</div><div id="sessionList"></div></div>
-        <div style="padding: 24px;"><button class="new-btn" onclick="createNewSession()">+ New Session</button></div>
+        <div class="sidebar-scroll">
+            <div class="section-label">Sessions</div>
+            <div id="sessionList"></div>
+        </div>
+        
+        <div style="position:relative; padding: 0 16px;">
+            <div id="archivedMenu" style="display:none; position:absolute; bottom: 100%; left: 16px; right: 16px; background: var(--modal-bg); border: 1px solid var(--border); border-radius: 16px; padding: 12px; box-shadow: 0 -10px 40px rgba(0,0,0,0.15); max-height: 50vh; overflow-y: auto; z-index: 100; margin-bottom: 10px;">
+                <div id="archivedList"></div>
+            </div>
+        </div>
+
+        <div style="padding: 10px 24px 24px; background: var(--side); z-index: 101;">
+            <div id="archiveToggleBtn" onclick="toggleArchiveMenu()" style="display:none; justify-content:space-between; align-items:center; cursor:pointer; padding: 10px 12px; border-radius: 12px; color: var(--mute); margin-bottom: 10px; transition: 0.2s;">
+                <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase;">Archived</span>
+                <i id="archiveIcon" data-lucide="eye" style="width:16px; height:16px;"></i>
+            </div>
+            <button class="new-btn" onclick="createNewSession()">+ New Session</button>
+        </div>
     </div>
     <div class="main" id="main">
         <header>
             <div style="display:flex; align-items:center; gap:15px;">
                 <button class="icon-btn" onclick="toggleSidebar()"><i data-lucide="sidebar"></i></button>
-                <span id="currentSessionDisplay" style="font-weight: 600; font-size: 1.1rem; color: var(--mute);">General</span>
+                <span id="currentSessionDisplay" style="font-weight: 600; font-size: 1.1rem; color: var(--mute);">Getting Started</span>
             </div>
             <div style="display:flex; gap:10px;">
                 <button class="icon-btn" onclick="toggleTheme()"><i data-lucide="sun" id="tIcon"></i></button>
@@ -342,7 +389,7 @@ cat << 'EOF' > index.html
             </div>
         </header>
         <div class="chat-area" id="chats"></div>
-        <div class="input-wrap">
+        <div class="input-wrap" id="inputWrap">
             <div class="input-pill">
                 <input type="text" id="userInput" placeholder="Ask anything about your global active files..." onkeypress="if(event.key=='Enter') send()">
                 <button onclick="send()" class="send-btn"><i data-lucide="arrow-up" style="width:20px;"></i></button>
@@ -373,6 +420,7 @@ cat << 'EOF' > index.html
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px;">
                 <h2 style="font-size: 1.5rem;">Global Memory Bank</h2>
                 <div style="display:flex; gap:10px;">
+                    <button onclick="nukeVault()" class="btn-outline" style="border: 1px solid rgba(255,59,48,0.3); color: #ff3b30; background: rgba(255,59,48,0.05);" title="Wipe Everything">Nuke</button>
                     <button onclick="createFolder('')" class="btn-outline"><i data-lucide="folder-plus" style="width:16px;"></i> Folder</button>
                     <button onclick="triggerUpload('')" class="btn-outline"><i data-lucide="upload" style="width:16px;"></i> Document</button>
                 </div>
@@ -384,13 +432,11 @@ cat << 'EOF' > index.html
     </div>
     <script>
         lucide.createIcons();
-        let currentSession = localStorage.getItem('lastSession') || 'General';
-        let openFolders = new Set(['']);
-        let uploadTarget = '';
-        marked.setOptions({ breaks: true });
         
         const hashSVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"></line><line x1="4" y1="15" x2="20" y2="15"></line><line x1="10" y1="3" x2="8" y2="21"></line><line x1="16" y1="3" x2="14" y2="21"></line></svg>';
-        const trashSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>';
+        const trashSVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>';
+        const archiveSVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
+        const unarchiveSVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"></path><rect x="1" y="3" width="22" height="5"></rect><path d="M10 12h4"></path><path d="M12 16v-5"></path><path d="M9 13l3-3 3 3"></path></svg>';
         const brainSVG = '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"></path></svg>';
         const folderSVG = '<svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>';
         const fileTextSVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>';
@@ -399,7 +445,70 @@ cat << 'EOF' > index.html
         const folderPlusSVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"></path><line x1="12" y1="10" x2="12" y2="16"></line><line x1="9" y1="13" x2="15" y2="13"></line></svg>';
         const filePlusSVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>';
         const checkSVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+        const databaseSVG = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5V19A9 3 0 0 0 21 19V5"></path><path d="M3 12A9 3 0 0 0 21 12"></path></svg>';
+        const msgSquareSVG = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
+        const infoSVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>';
 
+        let existingSessions = JSON.parse(localStorage.getItem('sessions') || '[]');
+        if (existingSessions.length === 0 || (existingSessions.length === 1 && existingSessions[0] === 'General')) {
+            existingSessions = ['Getting Started'];
+            localStorage.setItem('sessions', JSON.stringify(existingSessions));
+            localStorage.setItem('lastSession', 'Getting Started');
+        } else if (!existingSessions.includes('Getting Started')) {
+            existingSessions.unshift('Getting Started');
+            localStorage.setItem('sessions', JSON.stringify(existingSessions));
+        }
+
+        if (!localStorage.getItem('archivedSessions')) {
+            localStorage.setItem('archivedSessions', JSON.stringify([]));
+        }
+
+        const welcomeHTML = `
+        <div style="max-width: 640px; margin: 20px auto; text-align: center;">
+            <div style="width: 80px; height: 80px; background: var(--accent); border-radius: 22px; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 30px rgba(0,122,255,0.3); color: white;">
+                ${brainSVG}
+            </div>
+            <h1 style="font-size: 2.2rem; font-weight: 800; margin-bottom: 10px; letter-spacing: -0.5px;">Welcome to Project Assistant</h1>
+            <p style="color: var(--mute); font-size: 1.1rem; line-height: 1.5; margin-bottom: 40px;">Your private, offline AI intelligence.<br>Powered directly by your Mac's Apple Silicon.</p>
+
+            <div style="display: flex; flex-direction: column; gap: 16px; text-align: left;">
+                <div style="display: flex; gap: 16px; background: var(--msg-bot); padding: 20px; border-radius: 16px; border: 1px solid var(--border);">
+                    <div style="width: 44px; height: 44px; background: rgba(0,122,255,0.1); color: var(--accent); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">${databaseSVG}</div>
+                    <div>
+                        <strong style="font-size: 1.05rem; display: block; margin-bottom: 4px;">1. The Global Memory Bank</strong>
+                        <span style="color: var(--mute); font-size: 0.9rem; line-height: 1.4; display:block;">Click the database icon above to create folders and securely store your project documents on your local hard drive.</span>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 16px; background: var(--msg-bot); padding: 20px; border-radius: 16px; border: 1px solid var(--border);">
+                    <div style="width: 44px; height: 44px; background: rgba(0,122,255,0.1); color: var(--accent); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">${infoSVG}</div>
+                    <div>
+                        <strong style="font-size: 1.05rem; display: block; margin-bottom: 4px;">2. Teaching Me</strong>
+                        <span style="color: var(--mute); font-size: 0.9rem; line-height: 1.4; display:block;">For me to read a stored document, you must click <b>Learn</b> next to it. Once it shows as <b>Active</b>, I can answer questions about it.</span>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 16px; background: var(--msg-bot); padding: 20px; border-radius: 16px; border: 1px solid var(--border);">
+                    <div style="width: 44px; height: 44px; background: rgba(0,122,255,0.1); color: var(--accent); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">${msgSquareSVG}</div>
+                    <div>
+                        <strong style="font-size: 1.05rem; display: block; margin-bottom: 4px;">3. Chat & Archives</strong>
+                        <span style="color: var(--mute); font-size: 0.9rem; line-height: 1.4; display:block;">Create new chat sessions on the left to segregate your queries. You can Archive old sessions (including this guide) to keep your workspace clean.</span>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+
+        if (!localStorage.getItem('chat_Getting Started')) {
+            localStorage.setItem('chat_Getting Started', JSON.stringify([{ type: 'welcome', text: welcomeHTML }]));
+        } else {
+            localStorage.setItem('chat_Getting Started', JSON.stringify([{ type: 'welcome', text: welcomeHTML }]));
+        }
+
+        let currentSession = localStorage.getItem('lastSession') || 'Getting Started';
+        if (currentSession === 'General') { currentSession = 'Getting Started'; }
+
+        let openFolders = new Set(['']);
+        let uploadTarget = '';
+        marked.setOptions({ breaks: true });
+        
         function getHistory(session) { return JSON.parse(localStorage.getItem(`chat_${session}`)) || []; }
         function saveHistory(session, history) { localStorage.setItem(`chat_${session}`, JSON.stringify(history)); }
         
@@ -448,45 +557,137 @@ cat << 'EOF' > index.html
             return html;
         }
 
+        function createSessionHTML(s, isArchived) {
+            const div = document.createElement('div');
+            div.className = `nav-item ${s === currentSession ? 'active' : ''}`;
+            
+            let actionButtons = '';
+            if (s === 'Getting Started') {
+                const archBtn = isArchived 
+                    ? `<button class="btn-mini" title="Unarchive" onclick="toggleArchive(event, '${s}')">${unarchiveSVG}</button>`
+                    : `<button class="btn-mini" title="Archive" onclick="toggleArchive(event, '${s}')">${archiveSVG}</button>`;
+                actionButtons = `<div class="nav-actions">${archBtn}</div>`;
+            } else {
+                const archBtn = isArchived 
+                    ? `<button class="btn-mini" title="Unarchive" onclick="toggleArchive(event, '${s}')">${unarchiveSVG}</button>`
+                    : `<button class="btn-mini" title="Archive" onclick="toggleArchive(event, '${s}')">${archiveSVG}</button>`;
+                actionButtons = `<div class="nav-actions">${archBtn}<button class="btn-mini" style="color:#ff3b30;" title="Delete" onclick="deleteSession(event, '${s}')">${trashSVG}</button></div>`;
+            }
+
+            div.innerHTML = `<div class="nav-item-content">${hashSVG}<span>${s}</span></div>${actionButtons}`;
+            div.onclick = () => { currentSession = s; localStorage.setItem('lastSession', s); renderChat(); loadUI(); };
+            return div;
+        }
+
+        function toggleArchiveMenu() {
+            const menu = document.getElementById('archivedMenu');
+            const icon = document.getElementById('archiveIcon');
+            if(menu.style.display === 'none' || menu.style.display === '') {
+                menu.style.display = 'block';
+                icon.setAttribute('data-lucide', 'eye-off');
+            } else {
+                menu.style.display = 'none';
+                icon.setAttribute('data-lucide', 'eye');
+            }
+            lucide.createIcons();
+        }
+
         async function loadUI() {
-            const sessions = JSON.parse(localStorage.getItem('sessions') || '["General"]');
-            const sList = document.getElementById('sessionList'); sList.innerHTML = '';
-            sessions.forEach(s => {
-                const div = document.createElement('div');
-                div.className = `nav-item ${s === currentSession ? 'active' : ''}`;
-                div.innerHTML = `<div class="nav-item-content">${hashSVG}<span>${s}</span></div><button class="delete-btn" onclick="deleteSession(event, '${s}')">${trashSVG}</button>`;
-                div.onclick = () => { currentSession = s; localStorage.setItem('lastSession', s); renderChat(); loadUI(); };
-                sList.appendChild(div);
-            });
+            const allSessions = JSON.parse(localStorage.getItem('sessions') || '["Getting Started"]');
+            const archivedSessions = JSON.parse(localStorage.getItem('archivedSessions') || '[]');
+            
+            const active = allSessions.filter(s => !archivedSessions.includes(s));
+            const archived = allSessions.filter(s => archivedSessions.includes(s));
+
+            const sList = document.getElementById('sessionList'); 
+            sList.innerHTML = '';
+            active.forEach(s => sList.appendChild(createSessionHTML(s, false)));
+
+            const archMenuList = document.getElementById('archivedList');
+            const archToggleBtn = document.getElementById('archiveToggleBtn');
+            archMenuList.innerHTML = '';
+            
+            if (archived.length > 0) {
+                archToggleBtn.style.display = 'flex';
+                archived.forEach(s => archMenuList.appendChild(createSessionHTML(s, true)));
+            } else {
+                archToggleBtn.style.display = 'none';
+                document.getElementById('archivedMenu').style.display = 'none';
+                document.getElementById('archiveIcon').setAttribute('data-lucide', 'eye');
+            }
+
             try {
                 const res = await fetch('/files'); 
                 const data = await res.json();
                 document.getElementById('fileList').innerHTML = renderFileTree(data.tree || []);
             } catch(e) { console.log("Files not loaded yet"); }
+            
             document.getElementById('currentSessionDisplay').innerText = currentSession;
+            lucide.createIcons();
         }
         
         function renderChat() { 
             const chatBox = document.getElementById('chats'); 
+            const inputWrap = document.getElementById('inputWrap');
             chatBox.innerHTML = ''; 
+            
+            if (currentSession === 'Getting Started') {
+                inputWrap.style.opacity = '0';
+                inputWrap.style.pointerEvents = 'none';
+                inputWrap.style.height = '0';
+                inputWrap.style.padding = '0';
+            } else {
+                inputWrap.style.opacity = '1';
+                inputWrap.style.pointerEvents = 'auto';
+                inputWrap.style.height = 'auto';
+                inputWrap.style.padding = '20px 12% 40px';
+            }
+
             const history = getHistory(currentSession);
             if (history.length === 0) {
                 chatBox.innerHTML = `
                     <div class="empty-state">
                         <div class="empty-icon">${brainSVG}</div>
-                        <h2 style="font-size: 1.8rem; margin-bottom: 10px; font-weight: 700;">How can I help you today?</h2>
-                        <p style="color: var(--mute); font-size: 1.1rem;">I'm your local, private project assistant.</p>
-                        <div class="empty-grid">
-                            <div class="empty-card"><i data-lucide="folder-plus" style="color:var(--accent); width:24px;"></i><h3>1. Organize & Learn</h3><p>Store files in your Global Memory Bank and click "Learn" to activate them.</p></div>
-                            <div class="empty-card"><i data-lucide="message-square" style="color:var(--accent); width:24px;"></i><h3>2. Ask Questions</h3><p>Ask me anything. I'll search through all globally Active documents offline.</p></div>
+                        <h2 style="font-size: 1.8rem; margin-bottom: 10px; font-weight: 700;">Ready for questions!</h2>
+                        <p style="color: var(--mute); font-size: 1.1rem;">This session is clean and ready to go.</p>
+                        <div class="empty-grid" style="margin-top:30px;">
+                            <div class="empty-card">
+                                <span style="color:var(--accent); display:block; margin-bottom:12px;">${databaseSVG}</span>
+                                <h3 style="font-size: 1rem; margin-bottom: 8px; font-weight: 600;">1. Global Memory Bank</h3>
+                                <p style="font-size: 0.85rem; color: var(--mute); line-height: 1.5;">Your AI has access to all active documents. Add more via the database icon.</p>
+                            </div>
+                            <div class="empty-card">
+                                <span style="color:var(--accent); display:block; margin-bottom:12px;">${msgSquareSVG}</span>
+                                <h3 style="font-size: 1rem; margin-bottom: 8px; font-weight: 600;">2. Ask Anything</h3>
+                                <p style="font-size: 0.85rem; color: var(--mute); line-height: 1.5;">Type below to search your files. I will synthesize an answer and cite my sources.</p>
+                            </div>
                         </div>
                     </div>
                 `;
             } else {
-                history.forEach(msg => { chatBox.innerHTML += `<div class="msg ${msg.type}">${marked.parse(msg.text)}</div>`; }); 
+                history.forEach(msg => { 
+                    if(msg.type === 'welcome') {
+                        chatBox.innerHTML += `<div class="msg welcome">${msg.text}</div>`;
+                    } else {
+                        chatBox.innerHTML += `<div class="msg ${msg.type}">${marked.parse(msg.text)}</div>`; 
+                    }
+                }); 
             }
             chatBox.scrollTop = chatBox.scrollHeight; 
-            lucide.createIcons();
+        }
+
+        async function nukeVault() {
+            if (confirm("WARNING: This will permanently delete ALL documents, folders, active vectors, and chat history. This CANNOT be undone.")) {
+                if (confirm("Final confirmation: Are you absolutely sure you want to NUKE everything?")) {
+                    try {
+                        await fetch('/nuke', { method: 'POST' });
+                        localStorage.clear();
+                        location.reload();
+                    } catch(e) {
+                        alert("Error trying to nuke vault.");
+                    }
+                }
+            }
         }
 
         function toggleFolder(encPath) {
@@ -539,8 +740,65 @@ cat << 'EOF' > index.html
         }
         
         function toggleSidebar() { document.getElementById('sidebar').classList.toggle('hidden'); }
-        function createNewSession() { const name = prompt("Session Name:"); if (name) { const sess = JSON.parse(localStorage.getItem('sessions') || '["General"]'); if (!sess.includes(name)) sess.push(name); localStorage.setItem('sessions', JSON.stringify(sess)); currentSession = name; localStorage.setItem('lastSession', name); renderChat(); loadUI(); } }
-        function deleteSession(e, name) { e.stopPropagation(); if (name === 'General') return; if (confirm("Delete session history?")) { let sess = JSON.parse(localStorage.getItem('sessions')).filter(s => s !== name); localStorage.setItem('sessions', JSON.stringify(sess)); localStorage.removeItem(`chat_${name}`); if (currentSession === name) currentSession = 'General'; renderChat(); loadUI(); } }
+        
+        function createNewSession() { 
+            const name = prompt("Session Name:"); 
+            if (name) { 
+                let sess = JSON.parse(localStorage.getItem('sessions') || '["Getting Started"]'); 
+                if (!sess.includes(name)) sess.push(name); 
+                
+                // Ensure it's unarchived if it existed
+                let arch = JSON.parse(localStorage.getItem('archivedSessions') || '[]');
+                arch = arch.filter(s => s !== name);
+                localStorage.setItem('archivedSessions', JSON.stringify(arch));
+                
+                localStorage.setItem('sessions', JSON.stringify(sess)); 
+                currentSession = name; 
+                localStorage.setItem('lastSession', name); 
+                renderChat(); 
+                loadUI(); 
+            } 
+        }
+
+        function toggleArchive(e, name) {
+            e.stopPropagation();
+            let archived = JSON.parse(localStorage.getItem('archivedSessions') || '[]');
+            if (archived.includes(name)) {
+                archived = archived.filter(s => s !== name);
+            } else {
+                archived.push(name);
+                // Switch session if we just archived the active one
+                if (currentSession === name) {
+                    const allSessions = JSON.parse(localStorage.getItem('sessions') || '[]');
+                    const active = allSessions.filter(s => !archived.includes(s));
+                    currentSession = active.length > 0 ? active[0] : 'Getting Started';
+                    localStorage.setItem('lastSession', currentSession);
+                    renderChat();
+                }
+            }
+            localStorage.setItem('archivedSessions', JSON.stringify(archived));
+            loadUI();
+        }
+        
+        function deleteSession(e, name) { 
+            e.stopPropagation(); 
+            if (name === 'Getting Started') return;
+            
+            if (confirm(`Permanently delete the "${name}" chat history?`)) { 
+                let sess = JSON.parse(localStorage.getItem('sessions')).filter(s => s !== name); 
+                let arch = JSON.parse(localStorage.getItem('archivedSessions')).filter(s => s !== name); 
+                localStorage.setItem('sessions', JSON.stringify(sess)); 
+                localStorage.setItem('archivedSessions', JSON.stringify(arch)); 
+                localStorage.removeItem(`chat_${name}`); 
+                
+                if (currentSession === name) {
+                    currentSession = 'Getting Started'; 
+                    localStorage.setItem('lastSession', currentSession);
+                    renderChat();
+                }
+                loadUI(); 
+            } 
+        }
         
         async function send() {
             const input = document.getElementById('userInput'); const msg = input.value; if(!msg) return;
